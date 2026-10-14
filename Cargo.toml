@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["core", "crates/bose-bmap", "crates/bose-transport"]
+members = ["core", "crates/bose-bmap", "crates/bose-transport", "crates/bose-cli"]
 
 [workspace.package]
 edition = "2021"

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key><string>dev.local.bose-cli</string>
+  <key>CFBundleName</key><string>bose</string>
+  <key>CFBundleVersion</key><string>0.1.0</string>
+  <key>NSBluetoothAlwaysUsageDescription</key>
+  <string>Reads the battery, volume and noise-cancelling state of your Bose headphones.</string>
+</dict>
+</plist>

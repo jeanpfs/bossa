@@ -68,6 +68,16 @@ name = "bose-bmap"
 version = "0.1.0"
 
 [[package]]
+name = "bose-cli"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bose-bmap",
+ "bose-transport",
+ "tokio",
+]
+
+[[package]]
 name = "bose-transport"
 version = "0.1.0"
 dependencies = [
