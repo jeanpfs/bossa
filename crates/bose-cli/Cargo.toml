@@ -1,0 +1,14 @@
+[package]
+name = "bose-cli"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "bose"
+path = "src/main.rs"
+
+[dependencies]
+bose-bmap = { path = "../bose-bmap" }
+bose-transport = { path = "../bose-transport" }
+anyhow.workspace = true
+tokio.workspace = true
