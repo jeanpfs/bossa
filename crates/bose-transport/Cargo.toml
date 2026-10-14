@@ -1,0 +1,13 @@
+[package]
+name = "bose-transport"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+bose-bmap = { path = "../bose-bmap" }
+anyhow.workspace = true
+tokio.workspace = true
+parking_lot = "0.12"
+btleplug = "0.11"
+futures = "0.3"
+uuid = "1"

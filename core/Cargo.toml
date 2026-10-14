@@ -1,0 +1,20 @@
+[package]
+name = "bossa-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "bose_core"
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+parking_lot = "0.12"
+tokio = { version = "1", features = ["time", "macros", "sync", "rt-multi-thread"] }
+bose-bmap = { path = "../crates/bose-bmap" }
+bose-transport = { path = "../crates/bose-transport" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"

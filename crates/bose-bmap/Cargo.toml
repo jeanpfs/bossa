@@ -1,0 +1,6 @@
+[package]
+name = "bose-bmap"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
