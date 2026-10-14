@@ -1,0 +1,29 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Tag matches VERSION
+        run: |
+          [ "${GITHUB_REF_NAME#v}" = "$(tr -d '[:space:]' < VERSION)" ] || { echo "tag $GITHUB_REF_NAME != VERSION"; exit 1; }
+      - run: cargo test --release
+      - run: scripts/build.sh
+      - name: Package
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          ditto -c -k --keepParent build/Bossa.app "build/Bossa-$V-macos-arm64.zip"
+          (cd build && shasum -a 256 "Bossa-$V-macos-arm64.zip" > "Bossa-$V-macos-arm64.zip.sha256")
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          gh release create "$GITHUB_REF_NAME" --title "Bossa $V" --generate-notes "build/Bossa-$V-macos-arm64.zip" "build/Bossa-$V-macos-arm64.zip.sha256" \
+            || gh release upload "$GITHUB_REF_NAME" --clobber "build/Bossa-$V-macos-arm64.zip" "build/Bossa-$V-macos-arm64.zip.sha256"
