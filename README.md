@@ -4,6 +4,10 @@ A native macOS menu-bar app for **Bose QC Ultra Headphones (2nd Gen)**: battery,
 immersive audio, equalizer, shortcut button and Mac output volume, in a Liquid Glass panel.
 English, Spanish and Portuguese.
 
+<p align="center">
+  <img src="assets/demo.gif" alt="The Bossa panel: adjusting the Mac volume and switching noise-control modes" width="420">
+</p>
+
 > **Unofficial.** Bossa is not affiliated with, endorsed by or sponsored by Bose Corporation.
 > "Bose" is a trademark of its owners and is used here only to say which headphones the app talks to.
 
