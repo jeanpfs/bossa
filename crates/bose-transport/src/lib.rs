@@ -58,6 +58,9 @@ pub fn error_name(code: u8) -> String {
     format!("{n} ({code})")
 }
 
+/// Keep only the most recent unsolicited packets; nothing drains them during a long-lived session.
+const MAX_UNSOLICITED: usize = 64;
+
 pub struct Session<L: Link> {
     link: L,
     /// Packets received while waiting for something else (notifications, late responses).
@@ -88,6 +91,9 @@ impl<L: Link> Session<L> {
                         }
                         _ => {}
                     }
+                }
+                if self.unsolicited.len() >= MAX_UNSOLICITED {
+                    self.unsolicited.pop_front();
                 }
                 self.unsolicited.push_back(p);
             }

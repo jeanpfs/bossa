@@ -5,6 +5,21 @@ the version lives in the `VERSION` file (the only place to edit) and the build n
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-10-16
+
+### Fixed
+
+- Headphones dropping out during Meet/Teams/FaceTime calls. While a call uses the headset microphone,
+  Bossa now pauses its BLE polling and never scans, reconnects or re-encrypts the link; a slow answer is no
+  longer treated as a lost connection (3 consecutive misses, or the OS reporting the link down), and Bossa no
+  longer tears the BLE link down itself after one.
+- One CoreBluetooth central is reused for the whole process instead of a new one per scan.
+- Unsolicited BMAP packets are capped instead of accumulating for the whole session.
+
+### Docs
+
+- README demo GIF and the scripts that record it (`scripts/demo/`).
+
 ## [0.1.1] - 2026-10-16
 
 Maintenance release: build and release automation. No app behavior changes.

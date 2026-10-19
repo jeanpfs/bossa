@@ -48,9 +48,19 @@ impl Found {
     }
 }
 
+/// One CoreBluetooth central for the whole process. Creating a new `Manager` per scan piles up
+/// `CBCentralManager`s and forgets the peripherals already discovered (a connected device that no longer
+/// advertises could then never be found again without dropping it first).
+static ADAPTER: tokio::sync::OnceCell<Adapter> = tokio::sync::OnceCell::const_new();
+
 async fn adapter() -> Result<Adapter> {
-    let manager = Manager::new().await.context("Bluetooth manager (is Bluetooth permission granted to this terminal?)")?;
-    manager.adapters().await?.into_iter().next().ok_or_else(|| anyhow!("no Bluetooth adapter"))
+    let a = ADAPTER
+        .get_or_try_init(|| async {
+            let manager = Manager::new().await.context("Bluetooth manager (is Bluetooth permission granted to this terminal?)")?;
+            manager.adapters().await?.into_iter().next().ok_or_else(|| anyhow!("no Bluetooth adapter"))
+        })
+        .await?;
+    Ok(a.clone())
 }
 
 /// Scan for `secs` seconds and return everything seen (unfiltered; see `Found::is_bose`).
@@ -140,6 +150,10 @@ impl BleLink {
     pub async fn disconnect(&self) -> Result<()> {
         self.peripheral.disconnect().await?;
         Ok(())
+    }
+    /// Whether the OS still reports the LE link as up (a slow answer is not a dropped link).
+    pub async fn is_connected(&self) -> bool {
+        self.peripheral.is_connected().await.unwrap_or(false)
     }
 }
 

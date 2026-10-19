@@ -12,12 +12,16 @@ use parking_lot::Mutex;
 use serde::Serialize;
 
 use crate::prefs::SharedPrefs;
+use crate::volume;
 
 const WAIT: Duration = Duration::from_secs(4);
 const POLL: Duration = Duration::from_secs(5);
 /// Pause between connection attempts when the headphones are simply not there.
 const RETRY_NOT_FOUND: Duration = Duration::from_secs(3);
 const RETRY_ERROR: Duration = Duration::from_secs(8);
+/// Consecutive unanswered polls tolerated while the OS still reports the link as up. Answers stall for
+/// seconds when the radio is busy (a call, a crowded 2.4 GHz band); that is not a lost link.
+const MAX_MISSES: u32 = 3;
 
 /// One audio mode as configured on the headphones (AudioModes.ModeConfig).
 #[derive(Clone, Serialize, Debug)]
@@ -230,6 +234,16 @@ pub fn spawn(rt: &tokio::runtime::Handle, app: Ctx, shared: Shared, mut rx: Comm
                 s.status = "searching";
                 s.message = None;
             });
+            // Never scan or (re)connect while a call holds the headset: LE connect, pairing/encryption and the
+            // burst of initial reads compete with the voice link and make the headphones drop the call audio.
+            let mac = shared.lock().mac.clone();
+            if mac.as_deref().is_some_and(volume::headset_mic_in_use) {
+                tokio::select! {
+                    _ = tokio::time::sleep(RETRY_NOT_FOUND) => {}
+                    _ = rx.recv() => {}
+                }
+                continue;
+            }
             let wait = match session_once(&app, &shared, &mut rx, &mut alerts).await {
                 Ok(()) => RETRY_NOT_FOUND,
                 Err(e) if e.downcast_ref::<NotFound>().is_some() || e.downcast_ref::<LinkLost>().is_some() => {
@@ -276,8 +290,12 @@ async fn session_once(app: &Ctx, shared: &Shared, rx: &mut Commands, alerts: &mu
 
     while rx.try_recv().is_ok() {} // drop requests queued while we were offline
     let result = run_session(app, shared, &mut sess, rx, alerts).await;
-    // Best effort; never let a stuck disconnect block the reconnect loop.
-    let _ = tokio::time::timeout(Duration::from_secs(5), sess.link().disconnect()).await;
+    // A stalled link is left to the OS: tearing it down ourselves while the headphones are busy (e.g. in a call)
+    // forces a full reconnect + re-encryption that disrupts their audio. The next connect reuses it if still up.
+    if !result.as_ref().is_err_and(|e| e.downcast_ref::<LinkLost>().is_some()) {
+        // Best effort; never let a stuck disconnect block the reconnect loop.
+        let _ = tokio::time::timeout(Duration::from_secs(5), sess.link().disconnect()).await;
+    }
     result
 }
 
@@ -292,54 +310,94 @@ async fn run_session(app: &Ctx, shared: &Shared, sess: &mut Session<BleLink>, rx
     let mut modes = read_modes(sess).await;
     let mut extras = read_extras(sess).await;
     let mut cycles = 0u32;
-
-    loop {
-        cycles += 1;
-        if cycles % 12 == 0 {
-            let fresh = read_modes(sess).await;
-            if !fresh.is_empty() {
-                modes = fresh;
-            }
-            extras = read_extras(sess).await;
-        }
-        // Mandatory read: if it fails on an established session the link is gone.
-        let battery = sess.get(fblock::STATUS, func::BATTERY_LEVEL, WAIT).await.map_err(|e| anyhow::Error::new(LinkLost(format!("{e:#}"))))?;
-        let battery = bmap::parse_battery(&battery.payload).map_err(|e| anyhow!(e))?.into_iter().next();
-        let settings = sess.get(fblock::AUDIO_MODES, func::MODES_SETTINGS_CONFIG, WAIT).await.ok().and_then(|p| bmap::parse_mode_settings(&p.payload).ok());
-        let mp = sess.get(fblock::SETTINGS, func::MULTIPOINT, WAIT).await.ok().and_then(|p| p.payload.first().copied());
-        let mode = sess.get(fblock::AUDIO_MODES, func::CURRENT_MODE, WAIT).await.ok().and_then(|p| p.payload.first().copied());
-        let eq = sess.get(fblock::SETTINGS, EQ_FN, WAIT).await.ok().map(|p| parse_eq(&p.payload)).unwrap_or_default();
-
-        if let Some(b) = &battery {
-            if let Some(alert) = alerts.check(b.percentage) {
-                let enabled = app.prefs.lock().low_battery_alerts;
-                if enabled {
-                    app.alert(alert, name.as_deref(), b.percentage);
-                }
-            }
-        }
-
-        let (name, firmware, mac) = (name.clone(), firmware.clone(), mac.clone());
+    let mut misses = 0u32;
+    let mut in_call = false;
+    {
+        let (name, firmware, mac, modes) = (name.clone(), firmware.clone(), mac.clone(), modes.clone());
         publish(app, shared, |s| {
             s.status = "connected";
             s.message = None;
             s.name = name;
             s.firmware = firmware;
             s.mac = mac;
-            if let Some(b) = &battery {
-                s.battery = Some(b.percentage);
-                s.remaining_minutes = b.remaining_minutes;
-            }
-            s.modes = modes.clone();
-            s.settings = settings.map(|m| ModeSettingsView { cnc_level: m.cnc_level, auto_cnc: m.auto_cnc, spatial_audio: m.spatial_audio, anr_wind: m.anr_wind, anc_toggle: m.anc_toggle });
-            s.multipoint = mp.map(|f| Multipoint { enabled: f & 1 != 0, supported: f & 2 != 0 });
-            s.mode = mode;
-            s.shortcut_mode = extras.shortcut_mode;
-            s.shortcut_options = extras.shortcut_options.clone();
-            s.auto_pause = extras.auto_pause;
-            s.captouch_flag = extras.captouch_flag;
-            s.eq = eq;
+            s.modes = modes;
         });
+    }
+
+    loop {
+        // Stay quiet on the radio while the headset microphone is in use: polling over BLE during a call starves
+        // the voice link, and its slow answers would otherwise look like a lost connection.
+        let call = mac.as_deref().is_some_and(volume::headset_mic_in_use);
+        if call != in_call {
+            eprintln!("[device] call {}", if call { "started: polling paused" } else { "ended: polling resumed" });
+            in_call = call;
+            misses = 0;
+        }
+        'poll: {
+            if in_call {
+                break 'poll;
+            }
+            cycles += 1;
+            if cycles % 12 == 0 {
+                let fresh = read_modes(sess).await;
+                if !fresh.is_empty() {
+                    modes = fresh;
+                }
+                extras = read_extras(sess).await;
+            }
+            // Mandatory read. One unanswered poll is not a lost link; only give up when the OS says the link is
+            // down or the headphones stay silent for several polls in a row.
+            let battery = match sess.get(fblock::STATUS, func::BATTERY_LEVEL, WAIT).await {
+                Ok(p) => {
+                    misses = 0;
+                    p
+                }
+                Err(e) => {
+                    misses += 1;
+                    if misses >= MAX_MISSES || !sess.link().is_connected().await {
+                        return Err(anyhow::Error::new(LinkLost(format!("{e:#}"))));
+                    }
+                    eprintln!("[device] no answer ({misses}/{MAX_MISSES}), keeping the link: {e:#}");
+                    break 'poll;
+                }
+            };
+            let battery = bmap::parse_battery(&battery.payload).map_err(|e| anyhow!(e))?.into_iter().next();
+            let settings = sess.get(fblock::AUDIO_MODES, func::MODES_SETTINGS_CONFIG, WAIT).await.ok().and_then(|p| bmap::parse_mode_settings(&p.payload).ok());
+            let mp = sess.get(fblock::SETTINGS, func::MULTIPOINT, WAIT).await.ok().and_then(|p| p.payload.first().copied());
+            let mode = sess.get(fblock::AUDIO_MODES, func::CURRENT_MODE, WAIT).await.ok().and_then(|p| p.payload.first().copied());
+            let eq = sess.get(fblock::SETTINGS, EQ_FN, WAIT).await.ok().map(|p| parse_eq(&p.payload)).unwrap_or_default();
+
+            if let Some(b) = &battery {
+                if let Some(alert) = alerts.check(b.percentage) {
+                    let enabled = app.prefs.lock().low_battery_alerts;
+                    if enabled {
+                        app.alert(alert, name.as_deref(), b.percentage);
+                    }
+                }
+            }
+
+            let (name, firmware, mac) = (name.clone(), firmware.clone(), mac.clone());
+            publish(app, shared, |s| {
+                s.status = "connected";
+                s.message = None;
+                s.name = name;
+                s.firmware = firmware;
+                s.mac = mac;
+                if let Some(b) = &battery {
+                    s.battery = Some(b.percentage);
+                    s.remaining_minutes = b.remaining_minutes;
+                }
+                s.modes = modes.clone();
+                s.settings = settings.map(|m| ModeSettingsView { cnc_level: m.cnc_level, auto_cnc: m.auto_cnc, spatial_audio: m.spatial_audio, anr_wind: m.anr_wind, anc_toggle: m.anc_toggle });
+                s.multipoint = mp.map(|f| Multipoint { enabled: f & 1 != 0, supported: f & 2 != 0 });
+                s.mode = mode;
+                s.shortcut_mode = extras.shortcut_mode;
+                s.shortcut_options = extras.shortcut_options.clone();
+                s.auto_pause = extras.auto_pause;
+                s.captouch_flag = extras.captouch_flag;
+                s.eq = eq;
+            });
+        }
         tokio::select! {
             _ = tokio::time::sleep(POLL) => {}
             Some(cmd) = rx.recv() => {

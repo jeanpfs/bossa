@@ -4,7 +4,7 @@ members = ["core", "crates/bose-bmap", "crates/bose-transport", "crates/bose-cli
 
 [workspace.package]
 edition = "2021"
-version = "0.1.1"
+version = "0.1.2"
 
 [workspace.dependencies]
 anyhow = "1"
